@@ -11,10 +11,13 @@ connection = engine.connect()
 df = pd.read_csv('H-1B.csv')
 df.columns = map(str.lower, df.columns)   #This is because all table names are automatically turned into lower case in codio, so we make sure our code align with that.
  
-#Construct prevailing_wages table and populate the data into table:
+#Construct prevailing_wages table with columns directly come from original data
 prevailing_wages = df[["prevailing_wage", "pw_unit_of_pay", "pw_wage_level","pw_source", "pw_source_year", "pw_source_other"]]
+#drop duplicates
 prevailing_wages = prevailing_wages.drop_duplicates()
+#add id
 prevailing_wages.insert(0, 'pw_id', range(1, 1 + len(prevailing_wages)))
+#populate the data into table:
 prevailing_wages.to_sql(name='prevailing_wages',con=engine, if_exists='append',index=False)
  
 #Construct wages table and populate data:
@@ -24,7 +27,7 @@ wages.insert(0, 'wage_case_id', range(1, 1 + len(wages)))
 wages.to_sql(name='wages',con=engine, if_exists='append',index=False)
  
 #Construct soc table:
-#In Excel, some soc_code is shown in the data format, the code below is to reverse those columns into the correct form:
+#In Excel, some soc_code is shown in the date format, the code below is to reverse those columns into the correct form:
  
 df['soc_code']=np.where(df['soc_name']=='ADVERTISING AND PROMOTIONS MANAGERS','11-2011',df['soc_code'])
 df['soc_code']=np.where(df['soc_name']=='ADMINISTRATIVE SERVICES MANAGERS','11-3012',df['soc_code'])
@@ -88,48 +91,50 @@ cases = df[["case_number", "original_cert_date", "employment_start_date",
 "prevailing_wage", "pw_unit_of_pay", "pw_wage_level","pw_source",
 "pw_source_year", "pw_source_other", "job_title"]]
  
- 
-#Merge the needed columns to get id for different tables:
+ #Since we need 'wage_case_id' column in the cases table, and the column has a foreign key to 'wage_case_id' in'wages'table,
+ #we merge the two tables based on columns 'wage_rate_of_pay_from', 'wage_rate_of_pay_to', 'wage_unit_of_pay' so that it satisfy 
+ #the requirements of foreign key constraint
 cases = pd.merge(cases, prevailing_wages,  how='left', on=["prevailing_wage", "pw_unit_of_pay", "pw_wage_level","pw_source", "pw_source_year", "pw_source_other"])
 cases = pd.merge(cases, wages,  how='left', on=["wage_rate_of_pay_from", "wage_rate_of_pay_to", "wage_unit_of_pay"])
 job_title = job_title.rename(columns = {"job_title_name": "job_title"})
 cases = pd.merge(cases, job_title,  how='left', on=["job_title"])
  
-#Rename columns to make sure they have aligned names:
+#Rename columns to make sure they have aligned names when populating into the database:
 cases = cases[["case_number", "original_cert_date", "employment_start_date", "employment_end_date", "case_status", "visa_class", "job_title_id", "soc_code", "full_time_position", "pw_id", "wage_case_id"]]
 cases.to_sql(name='cases',con=engine, if_exists='append',index=False)
  
-#Construct worksite table:
+#Construct worksite table and populate data into database:
 worksite = df[["worksite_city", "worksite_county", "worksite_state", "worksite_postal_code"]]
 worksite = worksite.drop_duplicates()
 worksite.insert(0, 'worksite_id', range(1, 1 + len(worksite)))
 worksite.to_sql(name='worksite',con=engine, if_exists='append',index=False)
  
-#Construct worksite_book table:
+#Construct 'worksite_book' table and populate data into database, the merge here is also to make sure 'worksite_book' table
+#has correct corresponding 'worksite_id':
 worksite_book = df[["case_number", "worksite_city", "worksite_county", "worksite_state", "worksite_postal_code"]]
 worksite_book = pd.merge(worksite_book, worksite, how = "left", on = ["worksite_city", "worksite_county", "worksite_state", "worksite_postal_code"])
 worksite_book = worksite_book[["case_number", "worksite_id"]]
 worksite_book.to_sql(name='worksite_book',con=engine, if_exists='append',index=False)
  
-#Construct naics (North American Industry Classification System) table:
+#Construct naics (North American Industry Classification System) table and populate data into database:
 naics = df[['naics_code']]
 naics = naics.drop_duplicates()
 naics.insert(0, 'naics_id', range(1, 1 + len(naics)))
 naics.to_sql(name='naics',con=engine, if_exists='append',index=False)
  
-#Construct h1b_request_record table:
+#Construct h1b_request_record table and populate data into database:
 h1b_request_record = df[['total_workers', 'new_employment', 'continued_employment', 'change_previous_employment', 'new_concurrent_employment', 'change_employer', 'amended_petition']]
 h1b_request_record = h1b_request_record.drop_duplicates()
 h1b_request_record.insert(0, 'h1b_request_record_id', range(1, 1 + len(h1b_request_record)))
 h1b_request_record.to_sql(name='h1b_request_record',con=engine, if_exists='append',index=False)
  
-#Construct employer_address table:
+#Construct employer_address table and populate data into database:
 employer_address = df[['employer_address', 'employer_city', 'employer_state', 'employer_postal_code', 'employer_country', 'employer_province']]
 employer_address = employer_address.drop_duplicates()
 employer_address.insert(0, 'employer_address_id', range(1, 1 + len(employer_address)))
 employer_address.to_sql(name='employer_address',con=engine, if_exists='append',index=False)
  
-#Construct employer table, merge with nacis table to have ‘naics_code’ column:
+#Construct employer table, merge with nacis table to have correct corresponding ‘naics_code’ column:
 employer = df[['employer_name', 'employer_business_dba', 'h1b_dependent', 'willful_violator', 'support_h1b', 'labor_con_agree','employer_phone', 'employer_phone_ext', 'naics_code']]
  
 #Merge on NAICS:
@@ -168,7 +173,7 @@ employer_address_book.to_sql(name='employer_address_book',con=engine, if_exists=
 #Merge with employer and agent_attorney table:
  
 case_submission = df[["case_number", 'employer_name', 'employer_business_dba', 'naics_code',  'h1b_dependent', 'willful_violator', 'support_h1b', 'labor_con_agree',  "case_submitted", "decision_date", "agent_representing_employer", "agent_attorney_name", 'agent_attorney_city', 'agent_attorney_state']]
-#Merge with employer table to get corresponding 
+#Merge with employer table to get corresponding id
 case_submission = pd.merge(case_submission, employer, how='left', on=['employer_name', 'employer_business_dba', 'h1b_dependent', 'willful_violator', 'support_h1b', 'labor_con_agree'])
 case_submission = case_submission.drop_duplicates(subset = ["case_number", "employer_name"])
 case_submission = pd.merge(case_submission, agent_attorney, how='left', on=["agent_attorney_name", 'agent_attorney_city', 'agent_attorney_state'])
